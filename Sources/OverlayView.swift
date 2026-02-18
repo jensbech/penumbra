@@ -5,6 +5,11 @@ final class OverlayView: NSView {
         didSet { needsDisplay = true }
     }
 
+    /// Corner radius read from the focused window via the window server.
+    var cornerRadius: CGFloat = 10 {
+        didSet { needsDisplay = true }
+    }
+
     /// The focused window rect in screen coordinates (AppKit bottom-left origin).
     var cutoutRect: NSRect? {
         didSet { needsDisplay = true }
@@ -21,7 +26,7 @@ final class OverlayView: NSView {
             if !clipped.isNull && !clipped.isEmpty {
                 // Determine which edges extend to/beyond the screen boundary.
                 // Those corners should be square; free-floating corners get rounded.
-                let baseRadius: CGFloat = 10
+                let baseRadius = cornerRadius
                 let threshold: CGFloat = 1
                 let topFlush    = cutout.maxY >= bounds.maxY - threshold
                 let bottomFlush = cutout.minY <= bounds.minY + threshold

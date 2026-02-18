@@ -90,12 +90,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupFocusTracker() {
         focusTracker = FocusTracker()
-        focusTracker.onFocusedWindowChanged = { [weak self] rect in
-            self?.updateCutout(rect)
+        focusTracker.onFocusedWindowChanged = { [weak self] info in
+            self?.updateCutout(info?.rect, cornerRadius: info?.cornerRadius ?? 0)
         }
     }
 
-    private func updateCutout(_ rect: NSRect?) {
+    private func updateCutout(_ rect: NSRect?, cornerRadius: CGFloat) {
         for window in overlayWindows {
             if let rect = rect {
                 // Convert the screen-global rect to this overlay's local coordinates
@@ -105,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     width: rect.width,
                     height: rect.height
                 )
+                window.overlayView.cornerRadius = cornerRadius
                 window.overlayView.cutoutRect = localRect
             } else {
                 window.overlayView.cutoutRect = nil

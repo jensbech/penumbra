@@ -1,8 +1,32 @@
 import AppKit
 import ApplicationServices
 
+// Private macOS SkyLight APIs for reading window corner radius
+@_silgen_name("SLSMainConnectionID")
+private func SLSMainConnectionID() -> Int32
+
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ outWindowID: UnsafeMutablePointer<UInt32>) -> AXError
+
+@_silgen_name("SLSWindowQueryWindows")
+private func SLSWindowQueryWindows(_ cid: Int32, _ windows: CFArray, _ options: UInt32) -> OpaquePointer?
+
+@_silgen_name("SLSWindowQueryResultCopyWindows")
+private func SLSWindowQueryResultCopyWindows(_ query: OpaquePointer) -> OpaquePointer?
+
+@_silgen_name("SLSWindowIteratorAdvance")
+private func SLSWindowIteratorAdvance(_ iterator: OpaquePointer) -> Bool
+
+// Loaded dynamically — only available on macOS 26+, follows the Get rule (no ownership transfer)
+private typealias CornerRadiiFn = @convention(c) (OpaquePointer) -> Unmanaged<CFArray>?
+private let _getCornerRadii: CornerRadiiFn? = {
+    guard let handle = dlopen(nil, RTLD_LAZY),
+          let sym = dlsym(handle, "SLSWindowIteratorGetCornerRadii") else { return nil }
+    return unsafeBitCast(sym, to: CornerRadiiFn.self)
+}()
+
 final class FocusTracker {
-    var onFocusedWindowChanged: ((NSRect?) -> Void)?
+    var onFocusedWindowChanged: (((rect: NSRect, cornerRadius: CGFloat)?) -> Void)?
 
     private var observer: AXObserver?
     private var focusedElement: AXUIElement?
@@ -77,6 +101,30 @@ final class FocusTracker {
         focusedElement = nil
     }
 
+    private func cornerRadius(for element: AXUIElement) -> CGFloat {
+        var windowID: UInt32 = 0
+        guard _AXUIElementGetWindow(element, &windowID) == .success,
+              let getRadii = _getCornerRadii else { return 10 }
+
+        let cid = SLSMainConnectionID()
+        let windowArray = [NSNumber(value: windowID)] as NSArray
+        guard let query = SLSWindowQueryWindows(cid, windowArray, 0),
+              let iterator = SLSWindowQueryResultCopyWindows(query) else { return 10 }
+
+        guard SLSWindowIteratorAdvance(iterator) else { return 10 }
+
+        guard let unmanaged = getRadii(iterator) else { return 10 }
+        let radii = unmanaged.takeUnretainedValue()
+        guard CFArrayGetCount(radii) > 0 else { return 10 }
+
+        let valuePtr = CFArrayGetValueAtIndex(radii, 0)!
+        let cfNumber = unsafeBitCast(valuePtr, to: CFNumber.self)
+        var radius: Int32 = 0
+        CFNumberGetValue(cfNumber, .sInt32Type, &radius)
+
+        return radius > 0 ? CGFloat(radius) : 10
+    }
+
     fileprivate func handleNotification(_ notification: CFString, element: AXUIElement) {
         let name = notification as String
         if name == kAXFocusedWindowChangedNotification as String {
@@ -130,7 +178,8 @@ final class FocusTracker {
         let appKitY = screenHeight - position.y - size.height
 
         let rect = NSRect(x: position.x, y: appKitY, width: size.width, height: size.height)
-        onFocusedWindowChanged?(rect)
+        let radius = cornerRadius(for: win)
+        onFocusedWindowChanged?((rect: rect, cornerRadius: radius))
     }
 }
 

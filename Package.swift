@@ -7,7 +7,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "penumbra",
-            path: "Sources"
+            path: "Sources",
+            linkerSettings: [
+                .unsafeFlags(["-F/System/Library/PrivateFrameworks", "-framework", "SkyLight"])
+            ]
         )
     ]
 )
