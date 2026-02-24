@@ -63,34 +63,49 @@ final class FocusTracker {
 
         let appElement = AXUIElementCreateApplication(pid)
 
-        // Get the focused window
-        var value: AnyObject?
-        let result = AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &value)
-        if result == .success {
-            focusedElement = (value as! AXUIElement)
-            publishRect()
-        } else {
-            focusedElement = nil
-            onFocusedWindowChanged?(nil)
-        }
-
-        // Create observer for this PID
+        // Create observer for this PID first so window notifications are ready
         var obs: AXObserver?
         let err = AXObserverCreate(pid, axCallback, &obs)
         guard err == .success, let obs = obs else { return }
         observer = obs
 
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-
         AXObserverAddNotification(obs, appElement, kAXFocusedWindowChangedNotification as CFString, selfPtr)
-
-        if let win = focusedElement {
-            AXObserverAddNotification(obs, win, kAXMovedNotification as CFString, selfPtr)
-            AXObserverAddNotification(obs, win, kAXResizedNotification as CFString, selfPtr)
-            AXObserverAddNotification(obs, win, kAXWindowMiniaturizedNotification as CFString, selfPtr)
-        }
-
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
+
+        // Get the focused window and register per-window notifications
+        if let win = queryFocusedWindow(appElement) {
+            focusedElement = win
+            registerWindowNotifications(obs: obs, win: win, selfPtr: selfPtr)
+            publishRect()
+        } else {
+            focusedElement = nil
+            onFocusedWindowChanged?(nil)
+            // App may not be fully active yet — retry shortly
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+                guard let self, self.trackedPID == pid, let obs = self.observer else { return }
+                if let win = self.queryFocusedWindow(appElement) {
+                    self.focusedElement = win
+                    self.registerWindowNotifications(obs: obs, win: win, selfPtr: selfPtr)
+                    self.publishRect()
+                }
+            }
+        }
+    }
+
+    private func queryFocusedWindow(_ appElement: AXUIElement) -> AXUIElement? {
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &value) == .success else {
+            return nil
+        }
+        return (value as! AXUIElement)
+    }
+
+    private func registerWindowNotifications(obs: AXObserver, win: AXUIElement, selfPtr: UnsafeMutableRawPointer) {
+        AXObserverAddNotification(obs, win, kAXMovedNotification as CFString, selfPtr)
+        AXObserverAddNotification(obs, win, kAXResizedNotification as CFString, selfPtr)
+        AXObserverAddNotification(obs, win, kAXWindowMiniaturizedNotification as CFString, selfPtr)
+        AXObserverAddNotification(obs, win, kAXWindowDeminiaturizedNotification as CFString, selfPtr)
     }
 
     private func removeObserver() {
@@ -128,18 +143,16 @@ final class FocusTracker {
     fileprivate func handleNotification(_ notification: CFString, element: AXUIElement) {
         let name = notification as String
         if name == kAXFocusedWindowChangedNotification as String {
-            // Remove old window notifications
-            if let obs = observer, let oldWin = focusedElement {
-                let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-                AXObserverRemoveNotification(obs, oldWin, kAXMovedNotification as CFString)
-                AXObserverRemoveNotification(obs, oldWin, kAXResizedNotification as CFString)
-                AXObserverRemoveNotification(obs, oldWin, kAXWindowMiniaturizedNotification as CFString)
-
-                // Add for new window
+            let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+            if let obs = observer {
+                if let oldWin = focusedElement {
+                    AXObserverRemoveNotification(obs, oldWin, kAXMovedNotification as CFString)
+                    AXObserverRemoveNotification(obs, oldWin, kAXResizedNotification as CFString)
+                    AXObserverRemoveNotification(obs, oldWin, kAXWindowMiniaturizedNotification as CFString)
+                    AXObserverRemoveNotification(obs, oldWin, kAXWindowDeminiaturizedNotification as CFString)
+                }
                 focusedElement = element
-                AXObserverAddNotification(obs, element, kAXMovedNotification as CFString, selfPtr)
-                AXObserverAddNotification(obs, element, kAXResizedNotification as CFString, selfPtr)
-                AXObserverAddNotification(obs, element, kAXWindowMiniaturizedNotification as CFString, selfPtr)
+                registerWindowNotifications(obs: obs, win: element, selfPtr: selfPtr)
             } else {
                 focusedElement = element
             }
@@ -148,6 +161,8 @@ final class FocusTracker {
             publishRect()
         } else if name == kAXWindowMiniaturizedNotification as String {
             onFocusedWindowChanged?(nil)
+        } else if name == kAXWindowDeminiaturizedNotification as String {
+            publishRect()
         }
     }
 

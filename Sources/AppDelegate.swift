@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
@@ -7,10 +8,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var enabled = true
     private var opacity: CGFloat = 0.4
     private var enableMenuItem: NSMenuItem!
-    private var sliderMenuItem: NSMenuItem!
+    private var loginItemMenuItem: NSMenuItem!
+    private var opacitySlider: NSSlider!
+    private var opacityValueLabel: NSTextField!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Check accessibility permissions
         if !AXIsProcessTrusted() {
             let alert = NSAlert()
             alert.messageText = "Accessibility Access Required"
@@ -42,27 +44,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "circle.lefthalf.filled", accessibilityDescription: "penumbra")
-        }
+        updateIcon()
 
         let menu = NSMenu()
 
-        enableMenuItem = NSMenuItem(title: "Disable", action: #selector(toggleEnabled), keyEquivalent: "")
+        enableMenuItem = NSMenuItem(title: "Enabled", action: #selector(toggleEnabled), keyEquivalent: "e")
         enableMenuItem.target = self
+        enableMenuItem.state = .on
         menu.addItem(enableMenuItem)
+
+        loginItemMenuItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLoginItem), keyEquivalent: "")
+        loginItemMenuItem.target = self
+        loginItemMenuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        menu.addItem(loginItemMenuItem)
 
         menu.addItem(.separator())
 
         let sliderItem = NSMenuItem()
-        let sliderView = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 30))
-        let slider = NSSlider(value: Double(opacity), minValue: 0.0, maxValue: 1.0, target: self, action: #selector(opacityChanged(_:)))
-        slider.frame = NSRect(x: 16, y: 4, width: 168, height: 22)
-        slider.isContinuous = true
-        sliderView.addSubview(slider)
+        let sliderView = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 50))
+
+        let opacityTitleLabel = NSTextField(labelWithString: "Opacity")
+        opacityTitleLabel.frame = NSRect(x: 16, y: 30, width: 90, height: 14)
+        opacityTitleLabel.font = .menuFont(ofSize: 13)
+        sliderView.addSubview(opacityTitleLabel)
+
+        opacityValueLabel = NSTextField(labelWithString: percentString(opacity))
+        opacityValueLabel.frame = NSRect(x: 110, y: 30, width: 74, height: 14)
+        opacityValueLabel.font = .menuFont(ofSize: 13)
+        opacityValueLabel.alignment = .right
+        opacityValueLabel.textColor = .secondaryLabelColor
+        sliderView.addSubview(opacityValueLabel)
+
+        opacitySlider = NSSlider(value: Double(opacity), minValue: 0.0, maxValue: 1.0, target: self, action: #selector(opacityChanged(_:)))
+        opacitySlider.frame = NSRect(x: 16, y: 6, width: 168, height: 20)
+        opacitySlider.isContinuous = true
+        sliderView.addSubview(opacitySlider)
+
         sliderItem.view = sliderView
         menu.addItem(sliderItem)
-        sliderMenuItem = sliderItem
 
         menu.addItem(.separator())
 
@@ -70,6 +89,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(quitItem)
 
         statusItem.menu = menu
+    }
+
+    private func updateIcon() {
+        let symbolName = enabled ? "circle.lefthalf.filled" : "circle"
+        statusItem.button?.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "penumbra")
+    }
+
+    private func percentString(_ value: CGFloat) -> String {
+        "\(Int(value * 100))%"
     }
 
     // MARK: - Overlays
@@ -98,7 +126,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateCutout(_ rect: NSRect?, cornerRadius: CGFloat) {
         for window in overlayWindows {
             if let rect = rect {
-                // Convert the screen-global rect to this overlay's local coordinates
                 let localRect = NSRect(
                     x: rect.origin.x - window.frame.origin.x,
                     y: rect.origin.y - window.frame.origin.y,
@@ -117,14 +144,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleEnabled() {
         enabled.toggle()
-        enableMenuItem.title = enabled ? "Disable" : "Enable"
+        enableMenuItem.state = enabled ? .on : .off
+        opacitySlider.isEnabled = enabled
+        updateIcon()
         for window in overlayWindows {
             window.overlayView.opacity = enabled ? opacity : 0
         }
     }
 
+    @objc private func toggleLoginItem() {
+        do {
+            if SMAppService.mainApp.status == .enabled {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+        } catch {
+            // If registration requires user approval, open Login Items settings
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
+        }
+        loginItemMenuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+    }
+
     @objc private func opacityChanged(_ sender: NSSlider) {
         opacity = CGFloat(sender.doubleValue)
+        opacityValueLabel.stringValue = percentString(opacity)
         guard enabled else { return }
         for window in overlayWindows {
             window.overlayView.opacity = opacity
