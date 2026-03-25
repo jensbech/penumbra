@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var loginItemMenuItem: NSMenuItem!
     private var opacitySlider: NSSlider!
     private var opacityValueLabel: NSTextField!
+    private var lastCutoutRect: NSRect?
+    private var lastCornerRadius: CGFloat = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if !AXIsProcessTrusted() {
@@ -121,9 +123,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         focusTracker.onFocusedWindowChanged = { [weak self] info in
             self?.updateCutout(info?.rect, cornerRadius: info?.cornerRadius ?? 0)
         }
+        focusTracker.start()
     }
 
     private func updateCutout(_ rect: NSRect?, cornerRadius: CGFloat) {
+        lastCutoutRect = rect
+        lastCornerRadius = cornerRadius
         for window in overlayWindows {
             if let rect = rect {
                 let localRect = NSRect(
@@ -177,5 +182,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func screensDidChange() {
         setupOverlays()
+        updateCutout(lastCutoutRect, cornerRadius: lastCornerRadius)
     }
 }
